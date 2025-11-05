@@ -13,12 +13,12 @@ import java.util.concurrent.Semaphore;
 
 public class PriceUpdater implements Runnable {
 
-    // ✅ Use public Skinport endpoint
+    // ✅ Public Skinport API endpoint (no API key)
     private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
 
     private static final Map<String, Double> skinportMap = new ConcurrentHashMap<>();
     private static volatile long skinportLastLoad = 0L;
-    private static final long SKINPORT_TTL_MS = 15 * 60 * 1000; // Refresh every 15 minutes
+    private static final long SKINPORT_TTL_MS = 15 * 60 * 1000; // refresh every 15 minutes
 
     private static final Semaphore steamLimiter = new Semaphore(1);
     private static final Random rand = new Random();
@@ -97,20 +97,20 @@ public class PriceUpdater implements Runnable {
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(SKINPORT_URL).openConnection();
             conn.setRequestProperty("User-Agent", "CS2PriceBot/1.0");
-            conn.setRequestProperty("Accept", "application/json"); // ✅ Required for Skinport
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("Accept-Encoding", "br"); // ✅ required to avoid HTTP 406
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
 
             int code = conn.getResponseCode();
             if (code != 200) {
-                System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code);
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code + " — check rate limit or headers");
                 return;
             }
 
             JsonArray arr = JsonParser.parseReader(new InputStreamReader(conn.getInputStream()))
                     .getAsJsonArray();
 
-            // Limit to 100 random skins for performance
             List<JsonElement> all = new ArrayList<>();
             arr.forEach(all::add);
             Collections.shuffle(all);
@@ -132,7 +132,10 @@ public class PriceUpdater implements Runnable {
                 double price = safeDouble(o, "lowest_price");
                 if (price <= 0) price = safeDouble(o, "min_price");
 
-                if (price > 0) temp.put(n, price);
+                if (price > 0) {
+                    temp.put(n, price);
+                    System.out.printf("[Skinport] 💰 %s = %.2f €%n", n, price);
+                }
 
                 processed++;
                 if (processed % 10 == 0 || processed == total) {
