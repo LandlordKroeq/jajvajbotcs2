@@ -15,23 +15,29 @@ public class SlashCommandListener extends ListenerAdapter {
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         switch (event.getName()) {
-            case "case":
-                handleCaseCommand(event);
-                break;
-            case "inventory":
-                handleInventoryCommand(event);
-                break;
-            case "trade":
-                handleTradeCommand(event);
-                break;
-            case "refreshprices":
-                handleRefreshPrices(event);
-                break;
+            case "case" -> handleCaseCommand(event);
+            case "inventory" -> handleInventoryCommand(event);
+            case "trade" -> handleTradeCommand(event);
+            case "refreshprices" -> handleRefreshPrices(event);
         }
     }
 
     private void handleCaseCommand(SlashCommandInteractionEvent event) {
-        event.reply("Case opening menu here (placeholder)").setEphemeral(true).queue();
+        var embed = new net.dv8tion.jda.api.EmbedBuilder()
+                .setTitle("🎁 CS2 Case Menu")
+                .setDescription("Choose a case to open below! Each case contains random skins.")
+                .setColor(0x00BFFF)
+                .build();
+
+        var buttons = net.dv8tion.jda.api.interactions.components.ActionRow.of(
+                net.dv8tion.jda.api.interactions.components.buttons.Button.primary("open_prisma2", "🎨 Prisma 2 Case"),
+                net.dv8tion.jda.api.interactions.components.buttons.Button.primary("open_revolution", "⚡ Revolution Case"),
+                net.dv8tion.jda.api.interactions.components.buttons.Button.primary("open_dreams", "💤 Dreams & Nightmares")
+        );
+
+        event.replyEmbeds(embed)
+                .addActionRow(buttons.getButtons())
+                .queue();
     }
 
     private void handleInventoryCommand(SlashCommandInteractionEvent event) {
@@ -49,16 +55,17 @@ public class SlashCommandListener extends ListenerAdapter {
         event.reply("Trade system coming soon!").setEphemeral(true).queue();
     }
 
-    // --- Added admin command ---
     private void handleRefreshPrices(SlashCommandInteractionEvent event) {
         if (event.getMember() == null || !event.getMember().hasPermission(Permission.MANAGE_SERVER)) {
             event.reply("You need **Manage Server** to run this command.").setEphemeral(true).queue();
             return;
         }
-	int numThreads = 10;
-	for (int i = 0; i < numThreads; i++) {
-    	new Thread(new PriceUpdater(350, numThreads, i)).start();
-}
+
+        int numThreads = 10;
+        for (int i = 0; i < numThreads; i++) {
+            new Thread(new PriceUpdater(350, numThreads, i)).start();
+        }
+
         event.reply("⏳ Price refresh started. Check console logs for progress.").setEphemeral(true).queue();
     }
 }
