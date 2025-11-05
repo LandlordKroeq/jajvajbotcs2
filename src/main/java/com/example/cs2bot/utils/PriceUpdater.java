@@ -13,9 +13,7 @@ import java.util.concurrent.Semaphore;
 
 public class PriceUpdater implements Runnable {
 
-    // ✅ Public Skinport API endpoint (no API key)
     private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
-
     private static final Map<String, Double> skinportMap = new ConcurrentHashMap<>();
     private static volatile long skinportLastLoad = 0L;
     private static final long SKINPORT_TTL_MS = 15 * 60 * 1000; // refresh every 15 minutes
@@ -34,7 +32,7 @@ public class PriceUpdater implements Runnable {
     }
 
     public PriceUpdater() {
-        this(5000, 1, 0);
+        this(300000, 1, 0); // 5 min between updates (safe for Skinport)
     }
 
     static {
@@ -98,23 +96,31 @@ public class PriceUpdater implements Runnable {
             HttpURLConnection conn = (HttpURLConnection) new URL(SKINPORT_URL).openConnection();
             conn.setRequestProperty("User-Agent", "CS2PriceBot/1.0");
             conn.setRequestProperty("Accept", "application/json");
-            conn.setRequestProperty("Accept-Encoding", "br"); // ✅ required to avoid HTTP 406
+            // 🔧 disable Brotli; use gzip or plain text for proper parsing
+            conn.setRequestProperty("Accept-Encoding", "gzip, deflate, identity");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
 
             int code = conn.getResponseCode();
+            if (code == 429) {
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP 429 — rate limit hit, waiting 5 minutes");
+                Thread.sleep(300000);
+                return;
+            }
             if (code != 200) {
-                System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code + " — check rate limit or headers");
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code + " — check headers or rate limit");
                 return;
             }
 
-            JsonArray arr = JsonParser.parseReader(new InputStreamReader(conn.getInputStream()))
-                    .getAsJsonArray();
+            JsonReader reader = new JsonReader(new InputStreamReader(conn.getInputStream()));
+            reader.setLenient(true); // accept slightly malformed JSON
+            JsonArray arr = JsonParser.parseReader(reader).getAsJsonArray();
 
+            // pick 50 random items for performance
             List<JsonElement> all = new ArrayList<>();
             arr.forEach(all::add);
             Collections.shuffle(all);
-            List<JsonElement> subset = all.subList(0, Math.min(100, all.size()));
+            List<JsonElement> subset = all.subList(0, Math.min(50, all.size()));
 
             Map<String, Double> temp = new HashMap<>();
             int total = subset.size();
