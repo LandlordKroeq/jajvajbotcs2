@@ -1,4 +1,4 @@
-package com.example.cs2bot.utils;
+lpackage com.example.cs2bot.utils;
 
 import com.google.gson.*;
 import com.google.gson.stream.JsonReader;
@@ -97,7 +97,7 @@ public class PriceUpdater implements Runnable {
     }
 
     /**
-     * Loads prices from Skinport with proper headers and progress.
+     * Loads prices from Skinport with safe headers and delay.
      */
     private static void loadSkinportIfStale() {
         long now = Instant.now().toEpochMilli();
@@ -106,11 +106,12 @@ public class PriceUpdater implements Runnable {
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(SKINPORT_URL).openConnection();
 
-            // ✅ Correct headers for Skinport API
+            // ✅ Correct headers to prevent 406 & 429
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CS2PriceBot");
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
-            conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
+            conn.setRequestProperty("Accept-Encoding", "identity");
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
 
@@ -125,7 +126,7 @@ public class PriceUpdater implements Runnable {
                 return;
             }
             if (code == 406) {
-                System.err.println("[PriceProvider] ⚠️ Skinport HTTP 406 — fixed headers but server rejected format");
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP 406 — removed compression and fixed headers, still rejected (server-side issue)");
                 return;
             }
             if (code != 200) {
@@ -167,6 +168,9 @@ public class PriceUpdater implements Runnable {
                     System.out.printf("[Skinport] ⏳ %d/%d (%.0f%%) — latest: %s (%.2f€)%n",
                             processed, total, percent, n, price);
                 }
+
+                // gentle pacing between each item
+                Thread.sleep(300);
             }
 
             long duration = System.currentTimeMillis() - startTime;
