@@ -17,7 +17,7 @@ import java.util.concurrent.Semaphore;
  * 2️⃣ SteamPriceCache (cached data)
  * 3️⃣ Steam priceoverview fallback
  */
-public class PriceUpdater {
+public class PriceUpdater implements Runnable {
 
     private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
     private static String SKINPORT_API_KEY = null;
@@ -28,6 +28,23 @@ public class PriceUpdater {
 
     private static final Semaphore steamLimiter = new Semaphore(1);
     private static final Random rand = new Random();
+
+    // --- Added fields for threaded mode ---
+    private final int refreshInterval;
+    private final int totalThreads;
+    private final int threadIndex;
+
+    // ✅ New constructor to match usage in SlashCommandListener
+    public PriceUpdater(int refreshInterval, int totalThreads, int threadIndex) {
+        this.refreshInterval = refreshInterval;
+        this.totalThreads = totalThreads;
+        this.threadIndex = threadIndex;
+    }
+
+    // Default constructor (for static use)
+    public PriceUpdater() {
+        this(600, 1, 0);
+    }
 
     static {
         try {
@@ -45,6 +62,25 @@ public class PriceUpdater {
             }
         } catch (Exception e) {
             System.err.println("[PriceProvider] ⚠️ Could not load .env or API key: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            System.out.printf("[Thread-%d] 🌀 Starting price updater (interval=%d ms)%n",
+                    threadIndex, refreshInterval);
+
+            while (true) {
+                loadSkinportIfStale();
+                System.out.printf("[Thread-%d] ✅ Price refresh completed%n", threadIndex);
+                Thread.sleep(refreshInterval);
+            }
+
+        } catch (InterruptedException e) {
+            System.err.printf("[Thread-%d] ⚠️ Interrupted%n", threadIndex);
+        } catch (Exception e) {
+            System.err.printf("[Thread-%d] ❌ Unexpected error: %s%n", threadIndex, e.getMessage());
         }
     }
 
