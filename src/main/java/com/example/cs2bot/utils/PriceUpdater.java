@@ -18,7 +18,7 @@ public class PriceUpdater implements Runnable {
 
     private static final Map<String, Double> skinportMap = new ConcurrentHashMap<>();
     private static volatile long skinportLastLoad = 0L;
-    private static final long SKINPORT_TTL_MS = 10 * 60 * 1000; // 10 min cache
+    private static final long SKINPORT_TTL_MS = 15 * 60 * 1000; // 15 min cache
 
     private static final Semaphore steamLimiter = new Semaphore(1);
     private static final Random rand = new Random();
@@ -34,7 +34,7 @@ public class PriceUpdater implements Runnable {
     }
 
     public PriceUpdater() {
-        this(600, 1, 0);
+        this(5000, 1, 0);
     }
 
     static {
@@ -105,6 +105,7 @@ public class PriceUpdater implements Runnable {
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(SKINPORT_URL).openConnection();
             conn.setRequestProperty("User-Agent", "CS2PriceBot/1.0");
+            conn.setRequestProperty("Accept", "application/json"); // ✅ Fix 406
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
 
@@ -125,7 +126,7 @@ public class PriceUpdater implements Runnable {
             JsonArray arr = JsonParser.parseReader(new InputStreamReader(conn.getInputStream()))
                     .getAsJsonArray();
 
-            // Shuffle and limit to 100 random popular items
+            // Shuffle and limit to 100 random items
             List<JsonElement> all = new ArrayList<>();
             arr.forEach(all::add);
             Collections.shuffle(all);
@@ -161,7 +162,6 @@ public class PriceUpdater implements Runnable {
                 skinportMap.clear();
                 skinportMap.putAll(temp);
                 skinportLastLoad = now;
-
                 System.out.printf("[PriceProvider] ✅ Loaded %d Skinport prices in %.1fs%n",
                         temp.size(), duration / 1000.0);
             }
@@ -182,6 +182,7 @@ public class PriceUpdater implements Runnable {
 
                 HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (CS2PriceBot)");
+                conn.setRequestProperty("Accept", "application/json");
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
 
@@ -208,7 +209,7 @@ public class PriceUpdater implements Runnable {
                         .replace("€", "").replace(",", ".").trim();
 
                 double price = Double.parseDouble(priceStr);
-                System.out.printf("[Steam] 💰 %s = %.2f€%n", marketHashName, price);
+                System.out.printf("[Steam] 💰 %s = %.2f €%n", marketHashName, price);
                 return price;
             } catch (Exception e) {
                 System.err.printf("[PriceProvider] ❌ Steam error for %s: %s%n",
