@@ -15,7 +15,6 @@ public class SteamMarketAPI {
     private static final Semaphore limiter = new Semaphore(1);
     private static final Random random = new Random();
     private static final String CSFLOAT_API = "https://api.csfloat.com/api/v1/listings";
-
     private static String CSFLOAT_KEY;
 
     static {
@@ -26,21 +25,24 @@ public class SteamMarketAPI {
                 .load();
         CSFLOAT_KEY = dotenv.get("CSFLOAT_KEY");
         if (CSFLOAT_KEY == null || CSFLOAT_KEY.isBlank()) {
-            // fallback to your provided key if not in .env
+            // fallback if not in .env
             CSFLOAT_KEY = "tXgJgZqb_GA8KQiyBHFPjHkRxO9W2qUZ";
         }
         System.out.println("🔑 Using CSFloat API key: " + CSFLOAT_KEY.substring(0, 6) + "********");
     }
 
+    /**
+     * Fetches price and rarity for a CS2 item.
+     * Returns formatted string for logs.
+     */
     public static double getPriceEUR(String marketHashName) {
         if (marketHashName == null || marketHashName.isBlank()) return 0.0;
 
         String query = CSFLOAT_API + "?market_hash_name=" + encode(marketHashName);
-
         int attempts = 0;
+
         while (attempts < 3) {
             attempts++;
-
             try {
                 limiter.acquire();
                 Thread.sleep(200 + random.nextInt(300));
@@ -75,11 +77,13 @@ public class SteamMarketAPI {
                 }
 
                 JsonObject firstListing = json.getAsJsonArray("listings").get(0).getAsJsonObject();
-                double priceUsd = firstListing.get("price").getAsDouble() / 100.0; // API gives cents
-
-                // convert roughly USD -> EUR
+                double priceUsd = firstListing.get("price").getAsDouble() / 100.0;
                 double eur = priceUsd * 0.93;
-                System.out.printf("[CSFloatAPI] ✅ %s → %.2f EUR%n", marketHashName, eur);
+
+                // 🧩 Get rarity using local schema
+                String rarity = SteamSchemaAPI.getRarity(marketHashName);
+
+                System.out.printf("[CSFloatAPI] ✅ %s → %.2f EUR (%s)%n", marketHashName, eur, rarity);
                 return eur;
 
             } catch (Exception e) {
