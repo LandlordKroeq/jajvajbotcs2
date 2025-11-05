@@ -17,7 +17,7 @@ import java.util.concurrent.Semaphore;
  * 2️⃣ SteamPriceCache (cached data)
  * 3️⃣ Steam priceoverview fallback
  */
-public class PriceProvider {
+public class PriceUpdater {
 
     private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
     private static String SKINPORT_API_KEY = null;
