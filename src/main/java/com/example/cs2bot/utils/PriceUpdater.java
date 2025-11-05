@@ -13,13 +13,13 @@ import java.util.concurrent.Semaphore;
 
 /**
  * Unified price provider:
- * 1) Skinport public or authenticated API (EUR)
- * 2) SteamPriceCache (your local cache)
- * 3) Steam priceoverview fallback
+ * 1️⃣ Skinport public or authenticated API (EUR)
+ * 2️⃣ SteamPriceCache (cached data)
+ * 3️⃣ Steam priceoverview fallback
  */
 public class PriceProvider {
 
-    private static final String PUBLIC_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
+    private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
     private static String SKINPORT_API_KEY = null;
 
     private static final Map<String, Double> skinportMap = new ConcurrentHashMap<>();
@@ -36,6 +36,7 @@ public class PriceProvider {
                     .ignoreIfMissing()
                     .ignoreIfMalformed()
                     .load();
+
             SKINPORT_API_KEY = dotenv.get("SKINPORT_API_KEY");
             if (SKINPORT_API_KEY != null && !SKINPORT_API_KEY.isBlank()) {
                 System.out.println("🔑 Using authenticated Skinport API mode");
@@ -43,11 +44,14 @@ public class PriceProvider {
                 System.out.println("🌍 Using public Skinport API mode");
             }
         } catch (Exception e) {
-            System.err.println("[PriceProvider] ⚠️ Could not load API key: " + e.getMessage());
+            System.err.println("[PriceProvider] ⚠️ Could not load .env or API key: " + e.getMessage());
         }
     }
 
-    /** Try Skinport → Cache → Steam. */
+    /**
+     * Fetches a skin’s price in EUR.
+     * Tries Skinport → Cache → Steam fallback.
+     */
     public static double getPriceEUR(String marketHashName) {
         if (marketHashName == null || marketHashName.isBlank()) return 0.0;
 
@@ -58,26 +62,29 @@ public class PriceProvider {
         Double sp = skinportMap.get(normalized);
         if (sp != null && sp > 0) return sp;
 
-        // 2️⃣ Cache
+        // 2️⃣ Try Cache
         try {
             Double cached = SteamPriceCache.get(normalized);
             if (cached != null && cached > 0) return cached;
-        } catch (Throwable ignore) {}
+        } catch (Throwable ignored) {}
 
         // 3️⃣ Fallback to Steam
         double steam = steamPriceOverview(normalized);
         if (steam > 0) {
-            try { SteamPriceCache.put(normalized, steam); } catch (Throwable ignore) {}
+            try { SteamPriceCache.put(normalized, steam); } catch (Throwable ignored) {}
         }
         return steam;
     }
 
+    /**
+     * Loads prices from Skinport into memory every 10 minutes.
+     */
     private static void loadSkinportIfStale() {
         long now = Instant.now().toEpochMilli();
         if (now - skinportLastLoad < SKINPORT_TTL_MS && !skinportMap.isEmpty()) return;
 
         try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(PUBLIC_URL).openConnection();
+            HttpURLConnection conn = (HttpURLConnection) new URL(SKINPORT_URL).openConnection();
             conn.setRequestProperty("User-Agent", "CS2PriceBot/1.0");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
@@ -118,6 +125,9 @@ public class PriceProvider {
         }
     }
 
+    /**
+     * Fallback to Steam Market priceoverview.
+     */
     private static double steamPriceOverview(String marketHashName) {
         String url = "https://steamcommunity.com/market/priceoverview/"
                 + "?currency=3&appid=730&market_hash_name=" + encode(marketHashName);
@@ -167,7 +177,7 @@ public class PriceProvider {
         return 0.0;
     }
 
-    // --- helpers ---
+    // --- Helpers ---
     private static double safeDouble(JsonObject o, String key) {
         try { return o.get(key).getAsDouble(); } catch (Exception e) { return 0.0; }
     }
