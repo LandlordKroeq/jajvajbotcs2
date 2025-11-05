@@ -15,9 +15,11 @@ import java.util.concurrent.Semaphore;
 public class PriceUpdater implements Runnable {
 
     private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
+    private static String SKINPORT_API_KEY = null;
+
     private static final Map<String, Double> skinportMap = new ConcurrentHashMap<>();
     private static volatile long skinportLastLoad = 0L;
-    private static final long SKINPORT_TTL_MS = 15 * 60 * 1000; // refresh every 15 minutes
+    private static final long SKINPORT_TTL_MS = 10 * 60 * 1000; // 10 min cache
 
     private static final Semaphore steamLimiter = new Semaphore(1);
     private static final Random rand = new Random();
@@ -33,7 +35,7 @@ public class PriceUpdater implements Runnable {
     }
 
     public PriceUpdater() {
-        this(300000, 1, 0); // 5 min between updates (safe for Skinport)
+        this(600, 1, 0);
     }
 
     static {
@@ -44,9 +46,14 @@ public class PriceUpdater implements Runnable {
                     .ignoreIfMalformed()
                     .load();
 
-            System.out.println("🌍 Using public Skinport API mode (no key required)");
+            SKINPORT_API_KEY = dotenv.get("SKINPORT_API_KEY");
+            if (SKINPORT_API_KEY != null && !SKINPORT_API_KEY.isBlank()) {
+                System.out.println("🔑 Using authenticated Skinport API mode");
+            } else {
+                System.out.println("🌍 Using public Skinport API mode");
+            }
         } catch (Exception e) {
-            System.err.println("[PriceProvider] ⚠️ Could not load .env: " + e.getMessage());
+            System.err.println("[PriceProvider] ⚠️ Could not load .env or API key: " + e.getMessage());
         }
     }
 
@@ -89,39 +96,52 @@ public class PriceUpdater implements Runnable {
         return steam;
     }
 
+    /**
+     * Loads prices from Skinport with proper headers and progress.
+     */
     private static void loadSkinportIfStale() {
         long now = Instant.now().toEpochMilli();
         if (now - skinportLastLoad < SKINPORT_TTL_MS && !skinportMap.isEmpty()) return;
 
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(SKINPORT_URL).openConnection();
-            conn.setRequestProperty("User-Agent", "CS2PriceBot/1.0");
+
+            // ✅ Correct headers for Skinport API
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CS2PriceBot");
             conn.setRequestProperty("Accept", "application/json");
-            // 🔧 disable Brotli; use gzip or plain text for proper parsing
-            conn.setRequestProperty("Accept-Encoding", "gzip, deflate, identity");
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+            conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
 
+            if (SKINPORT_API_KEY != null && !SKINPORT_API_KEY.isBlank()) {
+                conn.setRequestProperty("Authorization", "Bearer " + SKINPORT_API_KEY);
+            }
+
             int code = conn.getResponseCode();
             if (code == 429) {
-                System.err.println("[PriceProvider] ⚠️ Skinport HTTP 429 — rate limit hit, waiting 5 minutes");
-                Thread.sleep(300000);
+                System.err.println("[PriceProvider] ⚠️ Skinport rate limit hit — waiting 3 min...");
+                Thread.sleep(180_000);
+                return;
+            }
+            if (code == 406) {
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP 406 — fixed headers but server rejected format");
                 return;
             }
             if (code != 200) {
-                System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code + " — check headers or rate limit");
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code);
                 return;
             }
 
             JsonReader reader = new JsonReader(new InputStreamReader(conn.getInputStream()));
-            reader.setLenient(true); // accept slightly malformed JSON
+            reader.setLenient(true);
+
             JsonArray arr = JsonParser.parseReader(reader).getAsJsonArray();
 
-            // pick 50 random items for performance
             List<JsonElement> all = new ArrayList<>();
             arr.forEach(all::add);
             Collections.shuffle(all);
-            List<JsonElement> subset = all.subList(0, Math.min(50, all.size()));
+            List<JsonElement> subset = all.subList(0, Math.min(100, all.size()));
 
             Map<String, Double> temp = new HashMap<>();
             int total = subset.size();
@@ -139,15 +159,13 @@ public class PriceUpdater implements Runnable {
                 double price = safeDouble(o, "lowest_price");
                 if (price <= 0) price = safeDouble(o, "min_price");
 
-                if (price > 0) {
-                    temp.put(n, price);
-                    System.out.printf("[Skinport] 💰 %s = %.2f €%n", n, price);
-                }
+                if (price > 0) temp.put(n, price);
 
                 processed++;
                 if (processed % 10 == 0 || processed == total) {
                     double percent = (processed / (double) total) * 100;
-                    System.out.printf("[Skinport] ⏳ Progress: %d/%d (%.0f%%)%n", processed, total, percent);
+                    System.out.printf("[Skinport] ⏳ %d/%d (%.0f%%) — latest: %s (%.2f€)%n",
+                            processed, total, percent, n, price);
                 }
             }
 
@@ -156,6 +174,7 @@ public class PriceUpdater implements Runnable {
                 skinportMap.clear();
                 skinportMap.putAll(temp);
                 skinportLastLoad = now;
+
                 System.out.printf("[PriceProvider] ✅ Loaded %d Skinport prices in %.1fs%n",
                         temp.size(), duration / 1000.0);
             }
@@ -176,7 +195,6 @@ public class PriceUpdater implements Runnable {
 
                 HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (CS2PriceBot)");
-                conn.setRequestProperty("Accept", "application/json");
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
 
@@ -203,7 +221,7 @@ public class PriceUpdater implements Runnable {
                         .replace("€", "").replace(",", ".").trim();
 
                 double price = Double.parseDouble(priceStr);
-                System.out.printf("[Steam] 💰 %s = %.2f €%n", marketHashName, price);
+                System.out.printf("[Steam] 💰 %s = %.2f€%n", marketHashName, price);
                 return price;
             } catch (Exception e) {
                 System.err.printf("[PriceProvider] ❌ Steam error for %s: %s%n",
