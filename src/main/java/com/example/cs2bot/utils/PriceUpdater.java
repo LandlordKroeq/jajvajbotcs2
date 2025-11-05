@@ -11,12 +11,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
-/**
- * Unified price provider:
- * 1️⃣ Skinport public or authenticated API (EUR)
- * 2️⃣ SteamPriceCache (cached data)
- * 3️⃣ Steam priceoverview fallback
- */
 public class PriceUpdater implements Runnable {
 
     private static final String SKINPORT_URL = "https://api.skinport.com/v1/items?app_id=730&currency=EUR";
@@ -24,24 +18,21 @@ public class PriceUpdater implements Runnable {
 
     private static final Map<String, Double> skinportMap = new ConcurrentHashMap<>();
     private static volatile long skinportLastLoad = 0L;
-    private static final long SKINPORT_TTL_MS = 10 * 60 * 1000; // refresh every 10 minutes
+    private static final long SKINPORT_TTL_MS = 10 * 60 * 1000; // 10 min cache
 
     private static final Semaphore steamLimiter = new Semaphore(1);
     private static final Random rand = new Random();
 
-    // --- Added fields for threaded mode ---
     private final int refreshInterval;
     private final int totalThreads;
     private final int threadIndex;
 
-    // ✅ New constructor to match usage in SlashCommandListener
     public PriceUpdater(int refreshInterval, int totalThreads, int threadIndex) {
         this.refreshInterval = refreshInterval;
         this.totalThreads = totalThreads;
         this.threadIndex = threadIndex;
     }
 
-    // Default constructor (for static use)
     public PriceUpdater() {
         this(600, 1, 0);
     }
@@ -73,7 +64,6 @@ public class PriceUpdater implements Runnable {
 
             while (true) {
                 loadSkinportIfStale();
-                System.out.printf("[Thread-%d] ✅ Price refresh completed%n", threadIndex);
                 Thread.sleep(refreshInterval);
             }
 
@@ -84,27 +74,20 @@ public class PriceUpdater implements Runnable {
         }
     }
 
-    /**
-     * Fetches a skin’s price in EUR.
-     * Tries Skinport → Cache → Steam fallback.
-     */
     public static double getPriceEUR(String marketHashName) {
         if (marketHashName == null || marketHashName.isBlank()) return 0.0;
 
         String normalized = normalizeName(marketHashName);
 
-        // 1️⃣ Try Skinport
         loadSkinportIfStale();
         Double sp = skinportMap.get(normalized);
         if (sp != null && sp > 0) return sp;
 
-        // 2️⃣ Try Cache
         try {
             Double cached = SteamPriceCache.get(normalized);
             if (cached != null && cached > 0) return cached;
         } catch (Throwable ignored) {}
 
-        // 3️⃣ Fallback to Steam
         double steam = steamPriceOverview(normalized);
         if (steam > 0) {
             try { SteamPriceCache.put(normalized, steam); } catch (Throwable ignored) {}
@@ -113,7 +96,7 @@ public class PriceUpdater implements Runnable {
     }
 
     /**
-     * Loads prices from Skinport into memory every 10 minutes.
+     * Load and store only 100 random popular items from Skinport.
      */
     private static void loadSkinportIfStale() {
         long now = Instant.now().toEpochMilli();
@@ -130,6 +113,10 @@ public class PriceUpdater implements Runnable {
             }
 
             int code = conn.getResponseCode();
+            if (code == 406) {
+                System.err.println("[PriceProvider] ⚠️ Skinport HTTP 406 — rate limit or format issue");
+                return;
+            }
             if (code != 200) {
                 System.err.println("[PriceProvider] ⚠️ Skinport HTTP " + code);
                 return;
@@ -138,8 +125,20 @@ public class PriceUpdater implements Runnable {
             JsonArray arr = JsonParser.parseReader(new InputStreamReader(conn.getInputStream()))
                     .getAsJsonArray();
 
+            // Shuffle and limit to 100 random popular items
+            List<JsonElement> all = new ArrayList<>();
+            arr.forEach(all::add);
+            Collections.shuffle(all);
+            List<JsonElement> subset = all.subList(0, Math.min(100, all.size()));
+
             Map<String, Double> temp = new HashMap<>();
-            for (JsonElement el : arr) {
+            int total = subset.size();
+            int processed = 0;
+            long startTime = System.currentTimeMillis();
+
+            System.out.printf("[Skinport] 🚀 Updating %d random skin prices...%n", total);
+
+            for (JsonElement el : subset) {
                 JsonObject o = el.getAsJsonObject();
                 if (!o.has("market_hash_name")) continue;
                 String name = o.get("market_hash_name").getAsString();
@@ -147,23 +146,31 @@ public class PriceUpdater implements Runnable {
 
                 double price = safeDouble(o, "lowest_price");
                 if (price <= 0) price = safeDouble(o, "min_price");
+
                 if (price > 0) temp.put(n, price);
+
+                processed++;
+                if (processed % 10 == 0 || processed == total) {
+                    double percent = (processed / (double) total) * 100;
+                    System.out.printf("[Skinport] ⏳ Progress: %d/%d (%.0f%%)%n", processed, total, percent);
+                }
             }
 
+            long duration = System.currentTimeMillis() - startTime;
             if (!temp.isEmpty()) {
                 skinportMap.clear();
                 skinportMap.putAll(temp);
                 skinportLastLoad = now;
-                System.out.println("[PriceProvider] ✅ Loaded " + temp.size() + " Skinport prices.");
+
+                System.out.printf("[PriceProvider] ✅ Loaded %d Skinport prices in %.1fs%n",
+                        temp.size(), duration / 1000.0);
             }
+
         } catch (Exception e) {
             System.err.println("[PriceProvider] ❌ Skinport error: " + e.getMessage());
         }
     }
 
-    /**
-     * Fallback to Steam Market priceoverview.
-     */
     private static double steamPriceOverview(String marketHashName) {
         String url = "https://steamcommunity.com/market/priceoverview/"
                 + "?currency=3&appid=730&market_hash_name=" + encode(marketHashName);
@@ -200,7 +207,9 @@ public class PriceUpdater implements Runnable {
                 String priceStr = json.get("lowest_price").getAsString()
                         .replace("€", "").replace(",", ".").trim();
 
-                return Double.parseDouble(priceStr);
+                double price = Double.parseDouble(priceStr);
+                System.out.printf("[Steam] 💰 %s = %.2f€%n", marketHashName, price);
+                return price;
             } catch (Exception e) {
                 System.err.printf("[PriceProvider] ❌ Steam error for %s: %s%n",
                         marketHashName, e.getMessage());
@@ -213,7 +222,6 @@ public class PriceUpdater implements Runnable {
         return 0.0;
     }
 
-    // --- Helpers ---
     private static double safeDouble(JsonObject o, String key) {
         try { return o.get(key).getAsDouble(); } catch (Exception e) { return 0.0; }
     }
